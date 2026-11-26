@@ -112,8 +112,8 @@ export default {
         '爸爸，看守扫到家人托付的活了：\n' +
         lines.join('\n') +
         '\n\n点头我就办，不点头就先搁着。\n' +
-        '办的时候按这个走：先复制到 D:\\Aurabot\\family-work，照要求算/改，存副本，' +
-        '用 qq_send_file 的 target 发回原号，最后把流水库里这几条标成 done。\n' +
+        '办的时候按这个走：原件一律不改，只改副本，' +
+        '做完发回原号，最后把流水库里这几条标成 done。\n' +
         '只回一句「收到」不算完。'
 
       Promise.resolve(api.send('private:' + owner, msg))
