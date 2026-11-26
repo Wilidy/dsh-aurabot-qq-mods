@@ -33,6 +33,7 @@ export default {
     familyQQ: '', // 一行一个家人 QQ，比如填 12345678 / 87654321
     familyNames: '', // 对应名字，可选
     ownerQQ: '', // 主人 QQ，用来叫醒
+    ownerLabel: '主人', // 叫主人什么，可自定义（如 老大 / 主人 / 老板）
     notifyGapSec: 30, // 两次提醒的最小间隔
     maxNotifyPerHour: 6, // 防止刷屏
     tablePath: '', // 供统计的表格路径（xlsx），留空则自己办活不可用
@@ -109,7 +110,7 @@ export default {
         lines.push('  流水号 ' + t.id)
       }
       const msg =
-        '爸爸，看守扫到家人托付的活了：\n' +
+        (cfg().ownerLabel || '主人') + '，看守扫到家人托付的活了：\n' +
         lines.join('\n') +
         '\n\n点头我就办，不点头就先搁着。\n' +
         '办的时候按这个走：原件一律不改，只改副本，' +
