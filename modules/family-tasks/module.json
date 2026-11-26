@@ -11,5 +11,5 @@
   "api": 1,
   "minPluginVersion": "1.2.0",
   "requires": [],
-  "capabilities": ["filesystem"]
+  "capabilities": ["filesystem", "process"]
 }
