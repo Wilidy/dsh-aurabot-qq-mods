@@ -24,7 +24,7 @@ export default {
   name: '家人代办',
   version: '0.1.0',
   api: 1,
-  description: '家人私聊的活自动收进流水库，能办的办、办不了的叫醒主人。',
+  description: '在不改变私聊权限的情况下，把设置的家人 QQ 吩咐给大肥鱼的任务转交给主人私聊来做。主人点头后，做完向家人 QQ 反馈结果。',
   panel: 'panel.js',
 
   defaults: {
