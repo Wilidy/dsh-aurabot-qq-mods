@@ -181,6 +181,51 @@ export default {
     })
 
     // ── 面板路由 ─────────────────────────────────────────────
+    const offRouteGet =
+      api.route &&
+      api.route('/get', async () => {
+        const s = cfg()
+        return {
+          ok: true,
+          enabled: s.enabled !== false,
+          autoHandle: s.autoHandle !== false,
+          familyQQ: s.familyQQ || '',
+          familyNames: s.familyNames || '',
+          ownerQQ: s.ownerQQ || '',
+          ownerLabel: s.ownerLabel || '主人',
+          notifyGapSec: Number(s.notifyGapSec) || 30,
+          maxNotifyPerHour: Number(s.maxNotifyPerHour) || 6,
+          tablePath: s.tablePath || '',
+          debugLog: !!s.debugLog,
+        }
+      })
+
+    const offRouteSet =
+      api.route &&
+      api.route('/set', async (req) => {
+        let body = {}
+        try {
+          body = (await api.core.http.body(req)) || {}
+        } catch {
+          body = req || {}
+        }
+        const patch = body.patch || body || {}
+        // 只挑认识的配置项，防止乱写
+        const allowed = [
+          'enabled', 'autoHandle', 'familyQQ', 'familyNames', 'ownerQQ',
+          'ownerLabel', 'notifyGapSec', 'maxNotifyPerHour', 'tablePath', 'debugLog',
+        ]
+        const clean = {}
+        for (const k of allowed) if (k in patch) clean[k] = patch[k]
+        try {
+          api.saveSettings(clean)
+          reloadConfig()
+          return { ok: true, settings: cfg() }
+        } catch (e) {
+          return { ok: false, message: e.message }
+        }
+      })
+
     const offRoute =
       api.route &&
       api.route('/status', async () => {
@@ -218,6 +263,8 @@ export default {
         try {
           offRoute && offRoute()
           offRouteReload && offRouteReload()
+          offRouteGet && offRouteGet()
+          offRouteSet && offRouteSet()
         } catch {
           /* 忽略 */
         }
