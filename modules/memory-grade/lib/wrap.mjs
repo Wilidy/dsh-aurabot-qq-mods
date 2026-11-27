@@ -44,6 +44,7 @@ function isTrivialText(text) {
 }
 import { judgeFreshness } from './freshness.mjs'
 import { statSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 
 /**
  * 找插件的 memory.sqlite 在哪。
@@ -60,9 +61,11 @@ export function findPluginDb(dataDir) {
   if (!dir) return ''
   let cur = dir
   // 最多往上找 6 层，别再往外跑了
+  // 2026-11-27 修 Linux 兼容：原来用 cur + '\\' + 'memory.sqlite' 硬拼反斜杠，
+  // Linux 下反斜杠不是分隔符，会拼成 ".../memory-grade\memory.sqlite" 这种不存在的路径，
+  // statSync 一路失败、返回空串。改用 node:path 的 join()，跟着系统分隔符走。
   for (let i = 0; i < 6; i++) {
-    const sep = cur.endsWith('\\') || cur.endsWith('/') ? '' : '\\'
-    const candidate = cur + sep + 'memory.sqlite'
+    const candidate = join(cur, 'memory.sqlite')
     try {
       if (statSync(candidate).isFile()) {
         // 关键：不能返回「模块自己的库」。
@@ -75,7 +78,8 @@ export function findPluginDb(dataDir) {
     } catch {
       /* 没有就往上走 */
     }
-    const parent = cur.replace(/[\\/][^\\/]+$/, '')
+    // 往上走一层：用 node:path 的 dirname，跨平台都对
+    const parent = dirname(cur)
     if (!parent || parent === cur) break
     cur = parent
   }

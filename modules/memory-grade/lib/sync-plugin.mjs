@@ -24,6 +24,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
+import { readFileSync } from 'node:fs'
 
 import { findPluginDb } from './wrap.mjs'
 export { findPluginDb }
@@ -63,6 +64,18 @@ function normalizeForCompare(jsonStr) {
  */
 export function syncFromPlugin({ pluginDb, targetDb, log } = {}) {
   if (!pluginDb || !targetDb) return { ok: false, added: 0, updated: 0, total: 0, message: '没给路径' }
+
+  // 2026-11-27 修：JSON 后端下 targetDb 是 memory.json，被当 sqlite 打开会报
+  // "file is not a database"。同步功能是给 sqlite 后端用的，JSON 后端跳过即可。
+  // 用文件头判断：sqlite 文件头是 "SQLite format 3\0"，JSON 不是。
+  try {
+    const head = readFileSync(targetDb).subarray(0, 16).toString('latin1')
+    if (!head.startsWith('SQLite format 3')) {
+      return { ok: false, added: 0, updated: 0, total: 0, message: '目标库不是 sqlite（JSON 后端），跳过同步' }
+    }
+  } catch {
+    // 文件不存在等情况交给后面 new DatabaseSync 处理
+  }
 
   let src
   try {
