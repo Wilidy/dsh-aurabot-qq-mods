@@ -175,7 +175,37 @@ export function openInbox(dir, opts = {}) {
     return parts.join('\n')
   }
 
-  return { put, pending, stats, clear, renderForModel, loadAll, file, root }
+  /**
+   * 2026-11-27 加：按条件删掉待整理条目，其余原样保留。
+   * 用来清掉不该进消化队列的 event 流水，又不误伤 knowledge/diary 这些。
+   * 返回删掉的条数。
+   */
+  function dropWhere(pred) {
+    if (typeof pred !== 'function') return 0
+    const all = loadAll()
+    const kept = all.filter((r) => !(r.done !== 1 && pred(r)))
+    const removed = all.length - kept.length
+    if (!removed) return 0
+    try {
+      // 先留个档，万一要找回来
+      if (existsSync(file)) {
+        const stamp = new Date(now()).toISOString().replace(/[:.]/g, '-')
+        try {
+          renameSync(file, join(root, `dropped-${stamp}.jsonl`))
+        } catch {
+          /* 留档失败不影响删除 */
+        }
+      }
+      writeFileSync(file, kept.map((r) => JSON.stringify(r)).join('\n') + (kept.length ? '\n' : ''), 'utf8')
+      cache = kept
+      cacheMtime = 0
+      return removed
+    } catch {
+      return 0
+    }
+  }
+
+  return { put, pending, stats, clear, dropWhere, renderForModel, loadAll, file, root }
 }
 
 /**

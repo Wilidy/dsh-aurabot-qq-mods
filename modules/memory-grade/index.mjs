@@ -47,13 +47,18 @@ import { openFlow, renderRecent } from './lib/flow.mjs'
  */
 function mirrorFromPluginMemory({ inbox, dataDir, force = false, log } = {}) {
   const MAP = {
-    event: { src: 'event', kind: 'event' },
+    // 2026-11-27 修：event 不再进消化队列。
+    // event 是「逛贴吧/刷小黑盒/刷B站」这类流水，本身已存在插件库里；
+    // 抄进消化队列让模型「提炼长期记忆」，模型按提示词把这些当废话全丢掉，
+    // 结果每 4 小时消化一次都是「收一百多条、写进 0 条」，还越攒越多（曾积压 282 条）。
+    // 真正值得提炼的是 knowledge/diary/tophub/tool/panel 这些，保留。
     tophub: { src: 'tophub', kind: 'hot' },
     knowledge: { src: 'knowledge', kind: 'knowledge' },
     diary: { src: 'diary', kind: 'diary' },
     tool: { src: 'tool', kind: 'tool' },
     panel: { src: 'panel', kind: 'manual' },
   }
+  // 已经抄进旧队列的 event 也不再参与消化：absorbInbox 里会过滤掉。
 
   let DatabaseSync
   try {
@@ -73,7 +78,11 @@ function mirrorFromPluginMemory({ inbox, dataDir, force = false, log } = {}) {
   }
 
   // 库的位置不能写死相对路径，不同环境布局不一样。自动往上找。
+  // 2026-11-27 修 Linux 兼容：findPluginDb 找不到时会返回空串，
+  // 之前没判空直接 new DatabaseSync('')，在 Linux 上会「成功」开成一个空库，
+  // 然后查询时抛 no such table: items，错误被误判成「表结构不对」。先判空再开。
   const dbFile = findPluginDb(dataDir)
+  if (!dbFile) return { ok: false, message: '没找到插件记忆库 memory.sqlite，跳过同步' }
   let db = null
   try {
     db = new DatabaseSync(dbFile, { readOnly: true })
@@ -96,10 +105,9 @@ function mirrorFromPluginMemory({ inbox, dataDir, force = false, log } = {}) {
       if (!d || d.invalidAt) continue
       const source = String(d.source || '')
       const kind = String(d.kind || '')
-      // event/seen 单独处理
-      let conf = MAP[source]
-      if (source === 'event' && kind === 'seen') conf = { src: 'event', kind: 'seen' }
+      const conf = MAP[source]
       if (!conf) {
+        // 不在白名单里的（含 event/seen）直接标记已处理，不再抄进消化队列
         seen.add(row.id)
         continue
       }
@@ -152,8 +160,20 @@ function mirrorFromPluginMemory({ inbox, dataDir, force = false, log } = {}) {
  */
 async function absorbInbox({ inbox, api, log, memory, max = 300 } = {}) {
   if (!inbox || !memory) return { ok: false, message: '收件箱或记忆模块不在' }
-  const rows = inbox.pending({ limit: max })
-  if (!rows.length) return { ok: true, message: '收件箱是空的', added: 0 }
+  let rows = inbox.pending({ limit: max })
+  // 2026-11-27 修：旧队列里积压的 event 流水不送模型（提炼不出东西，白跑还堵队列）。
+  // 它们已在插件库里存着，这里只把队列里的标记清掉。
+  const eventRows = rows.filter((r) => r.src === 'event')
+  if (eventRows.length) {
+    try {
+      const dropped = inbox.dropWhere((r) => r.src === 'event')
+      log?.info?.('[memory-grade] 消化时跳过并清掉 ' + dropped + ' 条 event 流水（保留其他来源）')
+    } catch {
+      /* 清不掉就算了，下次再试 */
+    }
+    rows = rows.filter((r) => r.src !== 'event')
+  }
+  if (!rows.length) return { ok: true, message: '收件箱没有可消化的内容', added: 0 }
 
   const bySrc = {}
   for (const r of rows) bySrc[r.src] = (bySrc[r.src] || 0) + 1
@@ -176,7 +196,11 @@ async function absorbInbox({ inbox, api, log, memory, max = 300 } = {}) {
 
   let out = ''
   try {
-    out = await api.ask({ system, text: input, maxTokens: 2000 })
+    // 2026-11-27 修：maxTokens 从 2000 提到 16000。
+    // 起因：hy4flash-free 这类推理模型会把输出预算全花在思考上
+    // （探针实测 2000 token 全是 reasoning-delta、0 个 text-delta，放宽到 4000 仍不够），
+    // 结果「消化 25 条、一条都没解析出来」。给思考留够空间才有正文。
+    out = await api.ask({ system, text: input, maxTokens: 16000 })
   } catch (error) {
     return { ok: false, message: '模型调用失败：' + error.message }
   }
@@ -259,7 +283,7 @@ async function absorbInbox({ inbox, api, log, memory, max = 300 } = {}) {
 export default {
   id: 'memory-grade',
   name: '记忆总库',
-  version: '2.1.3',
+  version: '2.1.4',
   api: 1,
   description: '存记忆、判密级、贴标签、算时效，还能顺手标八卦。写库前自动盖章，过期的只标「当时」不删除。东西全在自己机器上，不联网、不外传。',
   panel: 'panel.js',
@@ -1171,15 +1195,45 @@ function collectFromChats() {
     })
 
     // 机密红线（2026-11-25 从插件搬过来）：家里的身份只在家里私聊说。
-    const SECRET_RED_LINE =
-      /(赵清棠|婧涵|赵清禾|婧汝|赵克才|解秀英|张藤藤|藤姐|赵阳|1094184052|625220495|女主人|大大大藤|亲妈|后妈|家里人|咱家|我爸爸|我爸|我妈|我姐姐|我爷爷|我奶奶)/
+    // 2026-11-27 修隐私泄露：原来这里把家人真名和 QQ 号硬编码在源码里，
+    // 会跟着模块一起发到市场，谁下载都能看到别人家都有谁。
+    // 改成「通用词写死 + 家人名字/QQ 从设置读」，源码里一个真名都不留。
+    const RED_LINE_FIXED = [
+      '家里人', '咱家', '我爸爸', '我爸', '我妈妈', '我妈',
+      '我姐姐', '我妹妹', '我爷爷', '我奶奶', '亲妈', '后妈', '养父', '养母',
+    ]
+    let cachedRedLine = null
+    let cachedRedLineKey = ''
+    /** 按当前设置拼红线正则；设置变了就重建 */
+    function secretRedLine() {
+      const stRl0 = api.settings() || {}
+      const splitW = (v) =>
+        String(v || '')
+          .split(/[\n,，、;；|\s]+/)
+          .map((x) => x.trim())
+          .filter(Boolean)
+      const names = splitW(stRl0.familyNames)
+      const qqs = splitW(stRl0.familyQQ)
+      const key = names.join('|') + '#' + qqs.join('|')
+      if (cachedRedLine && cachedRedLineKey === key) return cachedRedLine
+      const words = [...new Set([...names, ...qqs, ...RED_LINE_FIXED])]
+      try {
+        const esc = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        cachedRedLine = new RegExp('(' + esc.join('|') + ')')
+        cachedRedLineKey = key
+        return cachedRedLine
+      } catch {
+        return null
+      }
+    }
     
     /** 这段文字能不能在「这个聊天」里说出去：主人私聊放行，其他场合命中就拦 */
     function redLineBlocks(text, chatId, ownerQQ) {
       const s = String(text || "").trim()
       if (!s) return false
       if (chatId === "private:" + String(ownerQQ || "")) return false
-      return SECRET_RED_LINE.test(s)
+      const reRl = secretRedLine()
+      return reRl ? reRl.test(s) : false
     }
     
     // 实时层：她说出去的话。send 是「最终发给 QQ 的消息段」，所有出站都经过这里。
@@ -1567,8 +1621,43 @@ api.on('prompt', (content, info) => {
 
     startTimers()
 
+    // ── 插件 1.2.x 兼容（2026-11-27）────────────────────────────
+    // 背景：模块的 8 个管理接口都标了 { access: 'panel' }，意思是「只允许面板调用」。
+    // 但插件 1.2.x 的 api.route(path, handler) 只认两个参数，第三个会被静默忽略——
+    // 接口照样注册、照样能跑，只是少了「面板来源校验 + Host 校验」两道防护。
+    // 为了能让 1.2.x 用户也装上模块，降了 minPluginVersion，同时在这里做分级：
+    //   · 只读接口（mem/list、mem/get、inbox/stats、wrap/status）→ 1.2.x 也照常开放
+    //   · 写接口（inbox/absorb、profile/clean、sync/run、mem/update）→ 1.2.x 默认挡掉
+    // 这样老插件用户能看、能用只读功能，但不会因为少了两道防护而被改记忆。
+    const pluginVer = (() => {
+      try {
+        const raw = String(globalThis.aurabot?.version || '')
+        const m = raw.match(/(\d+)\.(\d+)\.(\d+)/)
+        if (!m) return null
+        return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), raw }
+      } catch {
+        return null
+      }
+    })()
+    // 判不出来时按「不支持」处理，安全优先
+    const supportsRouteAccess = Boolean(
+      pluginVer && (pluginVer.major > 1 || (pluginVer.major === 1 && pluginVer.minor >= 3)),
+    )
+    /** 1.2.x 上写接口被挡时的统一回话 */
+    const writeBlocked = () => ({
+      ok: false,
+      blocked: 'need-plugin-1.3',
+      message:
+        '这个操作要在 aurabot 插件 1.3.0 以上才能安全执行（当前 ' +
+        (pluginVer?.raw || '未知版本') +
+        '）。1.2.x 的面板接口没有来源校验，所以「写记忆」这类操作默认关了；查看、搜索照常能用。升级插件后自动放开。',
+    })
+
     // 手动接口：面板或脚本想立刻消化一次，就调它。带 dry=1 只看不写。
     api.route('/inbox/absorb', async (req) => {
+      if (!supportsRouteAccess && String(api.core?.http?.query?.(req)?.dry || '') !== '1') {
+        return writeBlocked()
+      }
       const q = api.core?.http?.query?.(req) || {}
       const dry = String(q.dry || '') === '1'
       const memory = api.lazy?.('memory')
@@ -1591,6 +1680,8 @@ api.on('prompt', (content, info) => {
     api.route('/profile/clean', async (req) => {
       const q = api.core?.http?.query?.(req) || {}
       const dry = String(q.dry || '') === '1'
+      // 1.2.x 上只允许 dry（只看不改）
+      if (!supportsRouteAccess && !dry) return writeBlocked()
       return cleanProfilesNow(dry)
     }, { access: 'panel' })
 
@@ -1612,6 +1703,8 @@ api.on('prompt', (content, info) => {
       const pluginDb = findPluginDb(dataDir)
       if (!pluginDb) return { ok: false, message: "没找到插件的 memory.sqlite" }
       const dry = String(req?.url || "").includes("dry=1")
+      // 1.2.x 上只允许 dry（只报数不写）
+      if (!supportsRouteAccess && !dry) return writeBlocked()
       if (dry) {
         // 只报数：读插件的库，和咱们的比一比
         try {
@@ -1699,6 +1792,8 @@ api.on('prompt', (content, info) => {
   // 改完立刻同步回插件库，别让两边对不上。
   api.route('/mem/update', async (req) => {
     try {
+      // 1.2.x 没有面板来源校验，改记忆这种写操作挡掉
+      if (!supportsRouteAccess) return writeBlocked()
       if (!store) return { ok: false, message: '记忆库没开' }
       const b = await api.core.http.body(req)
       const id = String(b?.id || '').trim()
