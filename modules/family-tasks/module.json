@@ -20,6 +20,7 @@
   "requires": [],
   "capabilities": [
     "filesystem",
-    "process"
+    "process",
+    "plugin-internals"
   ]
 }
