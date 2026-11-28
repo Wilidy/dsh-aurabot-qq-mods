@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, readdirSync, writeFileSync, statSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 // node:sqlite 是实验性 API，取不到就退回读不了——只影响「抄外部记忆」这一步，不影响别的。
 let sqliteModule = null
 try {
@@ -1404,13 +1404,15 @@ api.on('prompt', (content, info) => {
         let cur = String(dataDir || "")
         if (!cur) return ""
         for (let i = 0; i < 5; i++) {
-          const cand = cur.replace(/[\\/]$/, "") + "\\chatlog"
+          // 2026-11-28 修 Linux 兼容：原来硬拼 "\\chatlog"，Linux 下不是分隔符，
+          // 会拼出不存在的路径导致「翻旧记录」失效。改用 node:path 的 join/dirname，跟系统分隔符走。
+          const cand = join(cur, 'chatlog')
           try {
             if (statSync(cand).isDirectory()) return cand
           } catch {
             /* 没有就往上走 */
           }
-          const parent = cur.replace(/[\\/][^\\/]+$/, "")
+          const parent = dirname(cur)
           if (!parent || parent === cur) break
           cur = parent
         }
@@ -1745,6 +1747,7 @@ api.on('prompt', (content, info) => {
       const offset = Math.max(Number(q.offset) || 0, 0)
       const cls = String(q.cls || '').trim()
       const tag = String(q.tag || '').trim()
+      const source = String(q.source || '').trim()
       const kw = String(q.q || '').trim().toLowerCase()
       const includePin = String(q.pin || '') !== '0'
 
@@ -1755,6 +1758,7 @@ api.on('prompt', (content, info) => {
       }
       if (cls) rows = rows.filter((m) => m.cls === cls)
       if (tag) rows = rows.filter((m) => (m.tags || []).includes(tag))
+      if (source) rows = rows.filter((m) => m.source === source)
       if (!includePin) rows = rows.filter((m) => !m.pin)
       if (kw) {
         rows = rows.filter((m) => String(m.text || '').toLowerCase().includes(kw))
